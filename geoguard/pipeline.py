@@ -152,6 +152,8 @@ class GeoGuard:
                 yield item
                 if isinstance(item, VerifierResult):
                     verifications.append(item)
+            # Surface provider errors instead of producing a report from partial results.
+            await asyncio.gather(*tasks)
 
         rubric = await self.rubricator(inp, verifications)
         yield rubric

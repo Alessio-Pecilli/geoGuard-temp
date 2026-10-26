@@ -252,3 +252,8 @@ output/
 
 # macOS noise
 .DS_Store
+
+# Local credentials and runtime files
+.env.*
+!.env.example
+geoguard-local.pid

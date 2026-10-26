@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     # LLM defaults — used by every block when its `model` / `reasoning_effort`
     # constructor params are None.
-    model: str = "openai:gpt-5.2"
+    model: str = "google:gemini-3.5-flash-lite"
     reasoning_effort: ReasoningEffort = "medium"
 
     # Optional explicit API key. When set, blocks construct providers with

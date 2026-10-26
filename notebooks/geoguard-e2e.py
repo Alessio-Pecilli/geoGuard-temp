@@ -49,7 +49,9 @@ def _(mo):
     # GeoGuard end-to-end demo
 
     Streaming pipeline: **claim extraction → metadata → tool selection → verification → report**.
-    Uses real public APIs (no keys): OpenStreetMap Nominatim for geocoding, Open-Meteo for historical weather.
+    Modello predefinito: **Gemini 3.5 Flash-Lite**. Inserisci la chiave di Google AI Studio.
+    Il piano gratuito ha quote di utilizzo: non e illimitato. Inizia con un testo breve.
+    I servizi geografici pubblici non richiedono chiavi; MODIS richiede credenziali NASA.
     """)
     return
 
@@ -92,21 +94,33 @@ def _(mo):
         "with reports of over 100 mm of rain falling over a 24-hour period."
     )
 
+    from local_credentials import read_gemini_key, save_gemini_key
+
     # --- Common controls ---
     model_input = mo.ui.text(
-        value="openai:gpt-5.2",
+        value="google:gemini-3.5-flash-lite",
         label="**Model** (`provider:name`)",
         full_width=True,
     )
     api_key_input = mo.ui.text(
         value="",
-        label="**API key** _(optional — leave blank to use `OPENAI_API_KEY` from env)_",
+        label="**Chiave API Gemini** (lascia vuoto per usare quella salvata)",
         kind="password",
         full_width=True,
     )
+    save_key_button = mo.ui.button(
+        label="Salva chiave su questo PC",
+        value="",
+        on_click=lambda _: save_gemini_key(api_key_input.value),
+    )
+    _saved_key_notice = (
+        "Chiave gia salvata: verra usata automaticamente."
+        if read_gemini_key()
+        else "Inserisci la chiave e premi Salva: sara conservata nel file .env locale."
+    )
     reasoning_input = mo.ui.dropdown(
         options=["low", "medium", "high"],
-        value="medium",
+        value="low",
         label="**Reasoning effort**",
     )
 
@@ -170,11 +184,13 @@ def _(mo):
         [
             mo.hstack([model_input, reasoning_input], justify="start"),
             api_key_input,
+            mo.hstack([save_key_button, mo.md(_saved_key_notice)]),
             input_tabs,
             run_button,
         ]
     )
     return (
+        save_key_button,
         api_key_input,
         input_tabs,
         model_input,
@@ -188,6 +204,12 @@ def _(mo):
         tiff_source,
         tiff_upload,
     )
+
+
+@app.cell
+def _(mo, save_key_button):
+    mo.md(save_key_button.value or "")
+    return
 
 
 @app.cell
@@ -312,128 +334,168 @@ async def _(
     mo.stop(not run_button.value, mo.md("_Click **Verify** to run the pipeline._"))
     mo.stop(pipeline_input is None, mo.callout(mo.md("**No input.** Enter text or upload a TIFF."), kind="warn"))
 
-    guard = GeoGuard(
-        model=model_input.value.strip() or None,
-        api_key=api_key_input.value.strip() or None,
-        reasoning_effort=reasoning_input.value,
-    )
+    import os as _os
+
+    _model_name = model_input.value.strip()
+    _key = api_key_input.value.strip()
+    _google = _model_name.startswith("google:")
+    from local_credentials import read_gemini_key as _read_gemini_key
+
+    _env_key = (_read_gemini_key() or _os.getenv("GOOGLE_API_KEY") or _os.getenv("GEMINI_API_KEY")) if _google else _os.getenv("OPENAI_API_KEY")
+    mo.stop(not (_key or _env_key), mo.callout(mo.md("**Chiave API mancante.** Inserisci la chiave Gemini nel campo sopra e premi Verify."), kind="warn"))
     events = []
+    try:
+        guard = GeoGuard(
+            model=model_input.value.strip() or None,
+            api_key=_key or _env_key or None,
+            reasoning_effort=reasoning_input.value,
+        )
 
-    with mo.status.spinner(title="Starting pipeline..."):
-        async for item in guard(pipeline_input):
-            events.append(item)
+        with mo.status.spinner(title="Starting pipeline..."):
+            async for item in guard(pipeline_input):
+                events.append(item)
 
-            if isinstance(item, ClaimGroup):
-                md = mo.md(
-                    f"---\n\n"
-                    f"### 📦 Event group — `{item.metadata.event_type.value}` "
-                    f"({len(item.claims)} claim{'s' if len(item.claims) != 1 else ''})\n\n"
-                    f"- **Location:** {getattr(item.metadata.location, 'name', None) or '_unknown_'}\n"
-                    f"- **Time range:** {getattr(item.metadata.time_range, 'start', None) or '_unknown_'} → {getattr(item.metadata.time_range, 'end', None) or '_unknown_'}"
-                )
-                mo.output.append(md)
-
-            elif isinstance(item, Claim):
-                mo.output.append(
-                    mo.callout(mo.md(f"📝 **Claim:** {item.claim}"), kind="info")
-                )
-
-            elif isinstance(item, SelectedTools):
-                claim_text = item.claim.claim if item.claim else "_(unknown claim)_"
-                tools_list = (
-                    "\n".join(f"  - `{t.__name__}`" for t in item.tools)
-                    or "  - _(none)_"
-                )
-                mo.output.append(
-                    mo.md(
-                        f"🔧 **Tools for** _{claim_text[:80]}_\n{tools_list}\n\n"
-                        f"_Reasoning:_ {item.reasoning or '—'}"
+                if isinstance(item, ClaimGroup):
+                    md = mo.md(
+                        f"---\n\n"
+                        f"### 📦 Event group — `{item.metadata.event_type.value}` "
+                        f"({len(item.claims)} claim{'s' if len(item.claims) != 1 else ''})\n\n"
+                        f"- **Location:** {getattr(item.metadata.location, 'name', None) or '_unknown_'}\n"
+                        f"- **Time range:** {getattr(item.metadata.time_range, 'start', None) or '_unknown_'} → {getattr(item.metadata.time_range, 'end', None) or '_unknown_'}"
                     )
-                )
+                    mo.output.append(md)
 
-            elif isinstance(item, VerifierResult):
-                _v = item.verification
-                _tool_calls_md = (
-                    "\n".join(
-                        f"- **{_tc.name}**`({_tc.args})`\n  → `{_tc.result}`"
-                        for _tc in item.tool_calls
+                elif isinstance(item, Claim):
+                    mo.output.append(
+                        mo.callout(mo.md(f"📝 **Claim:** {item.claim}"), kind="info")
                     )
-                    or "_no tool calls made_"
-                )
-                mo.output.append(
-                    mo.callout(
+
+                elif isinstance(item, SelectedTools):
+                    claim_text = item.claim.claim if item.claim else "_(unknown claim)_"
+                    tools_list = (
+                        "\n".join(f"  - `{t.__name__}`" for t in item.tools)
+                        or "  - _(none)_"
+                    )
+                    mo.output.append(
                         mo.md(
-                            f"**Verdict:** {VERDICT_EMOJI[_v.verdict]} **{_v.verdict.value.upper()}**\n\n"
-                            f"**Rationale:** {_v.rationale}\n\n"
-                            f"**Tool calls** ({len(item.tool_calls)}):\n{_tool_calls_md}"
-                        ),
-                        kind=VERDICT_KIND[_v.verdict],
-                    )
-                )
-
-            elif isinstance(item, Rubric):
-                mo.output.append(
-                    mo.callout(
-                        mo.md(
-                            f"## 📋 Rubric — overall confidence: **{item.confidence:.0%}**"
-                        ),
-                        kind="info",
-                    )
-                )
-                _summary_rows = [
-                    {
-                        "Claim": (
-                            _cr.claim.claim[:80] + "…"
-                            if len(_cr.claim.claim) > 80
-                            else _cr.claim.claim
-                        ),
-                        "Score": f"{_cr.score:.0%}",
-                        "Yes / Total": f"{sum(1 for _it in _cr.items if _it.answer)} / {len(_cr.items)}",
-                    }
-                    for _cr in item.per_claim
-                ]
-                mo.output.append(mo.md("**Per-claim scores:**"))
-                mo.output.append(
-                    mo.ui.table(_summary_rows, selection=None, page_size=20)
-                )
-
-                _detail_rows = []
-                for _cr in item.per_claim:
-                    _claim_label = (
-                        _cr.claim.claim[:60] + "…"
-                        if len(_cr.claim.claim) > 60
-                        else _cr.claim.claim
-                    )
-                    for _it in _cr.items:
-                        _detail_rows.append(
-                            {
-                                "Claim": _claim_label,
-                                "Question": _it.question,
-                                "Answer": "✓" if _it.answer else "✗",
-                                "Reasoning": (
-                                    (_it.reasoning or "")[:160] + "…"
-                                    if _it.reasoning and len(_it.reasoning) > 160
-                                    else (_it.reasoning or "")
-                                ),
-                            }
+                            f"🔧 **Tools for** _{claim_text[:80]}_\n{tools_list}\n\n"
+                            f"_Reasoning:_ {item.reasoning or '—'}"
                         )
-                mo.output.append(mo.md("**Rubric items (all claims):**"))
-                mo.output.append(
-                    mo.ui.table(_detail_rows, selection=None, page_size=30)
-                )
-
-            elif isinstance(item, Report):
-                mo.output.append(
-                    mo.callout(
-                        mo.md(
-                            f"## 🎉 Pipeline complete\n\n"
-                            f"### Overall verdict: {VERDICT_EMOJI[item.overall_verdict]} **{item.overall_verdict.value.upper()}**\n\n"
-                            f"### Rubric confidence: **{item.rubric.confidence:.0%}**\n\n"
-                            f"_{len(item.verifications)} claim verification(s)_"
-                        ),
-                        kind=VERDICT_KIND[item.overall_verdict],
                     )
-                )
+
+                elif isinstance(item, VerifierResult):
+                    _v = item.verification
+                    _tool_calls_md = (
+                        "\n".join(
+                            f"- **{_tc.name}**`({_tc.args})`\n  → `{_tc.result}`"
+                            for _tc in item.tool_calls
+                        )
+                        or "_no tool calls made_"
+                    )
+                    mo.output.append(
+                        mo.callout(
+                            mo.md(
+                                f"**Verdict:** {VERDICT_EMOJI[_v.verdict]} **{_v.verdict.value.upper()}**\n\n"
+                                f"**Rationale:** {_v.rationale}\n\n"
+                                f"**Tool calls** ({len(item.tool_calls)}):\n{_tool_calls_md}"
+                            ),
+                            kind=VERDICT_KIND[_v.verdict],
+                        )
+                    )
+
+                elif isinstance(item, Rubric):
+                    mo.output.append(
+                        mo.callout(
+                            mo.md(
+                                f"## 📋 Rubric — overall confidence: **{item.confidence:.0%}**"
+                            ),
+                            kind="info",
+                        )
+                    )
+                    _summary_rows = [
+                        {
+                            "Claim": (
+                                _cr.claim.claim[:80] + "…"
+                                if len(_cr.claim.claim) > 80
+                                else _cr.claim.claim
+                            ),
+                            "Score": f"{_cr.score:.0%}",
+                            "Yes / Total": f"{sum(1 for _it in _cr.items if _it.answer)} / {len(_cr.items)}",
+                        }
+                        for _cr in item.per_claim
+                    ]
+                    mo.output.append(mo.md("**Per-claim scores:**"))
+                    mo.output.append(
+                        mo.ui.table(_summary_rows, selection=None, page_size=20)
+                    )
+
+                    _detail_rows = []
+                    for _cr in item.per_claim:
+                        _claim_label = (
+                            _cr.claim.claim[:60] + "…"
+                            if len(_cr.claim.claim) > 60
+                            else _cr.claim.claim
+                        )
+                        for _it in _cr.items:
+                            _detail_rows.append(
+                                {
+                                    "Claim": _claim_label,
+                                    "Question": _it.question,
+                                    "Answer": "✓" if _it.answer else "✗",
+                                    "Reasoning": (
+                                        (_it.reasoning or "")[:160] + "…"
+                                        if _it.reasoning and len(_it.reasoning) > 160
+                                        else (_it.reasoning or "")
+                                    ),
+                                }
+                            )
+                    mo.output.append(mo.md("**Rubric items (all claims):**"))
+                    mo.output.append(
+                        mo.ui.table(_detail_rows, selection=None, page_size=30)
+                    )
+
+                elif isinstance(item, Report):
+                    mo.output.append(
+                        mo.callout(
+                            mo.md(
+                                f"## 🎉 Pipeline complete\n\n"
+                                f"### Overall verdict: {VERDICT_EMOJI[item.overall_verdict]} **{item.overall_verdict.value.upper()}**\n\n"
+                                f"### Rubric confidence: **{item.rubric.confidence:.0%}**\n\n"
+                                f"_{len(item.verifications)} claim verification(s)_"
+                            ),
+                            kind=VERDICT_KIND[item.overall_verdict],
+                        )
+                    )
+    except Exception as _error:
+        import logging as _logging
+        import re as _re
+
+        _status = getattr(_error, "status_code", None)
+        _body = getattr(_error, "body", None)
+        if isinstance(_body, dict):
+            _detail = _body.get("message") or _body.get("error", {})
+            if isinstance(_detail, dict):
+                _detail = _detail.get("message", "")
+        else:
+            _detail = str(_body or "")
+        _detail = _re.sub(r"AIza[0-9A-Za-z_-]+|sk-[0-9A-Za-z_-]+", "[chiave rimossa]", str(_detail))
+        for _secret in (_key, _env_key):
+            if _secret:
+                _detail = _detail.replace(_secret, "[chiave rimossa]")
+        _logging.getLogger("geoguard.local").error("Verifica interrotta: HTTP %s, %s: %s", _status, type(_error).__name__, _detail[:2000])
+        if _status == 429:
+            _message = "Quota API esaurita o troppe richieste. Controlla i limiti del progetto in Google AI Studio e riprova quando la quota si ripristina. Il piano gratuito non e illimitato."
+        elif _status in (401, 403):
+            _message = "Chiave API non valida o accesso negato. Controlla la chiave e le autorizzazioni del progetto."
+        elif _status == 404:
+            _message = "Modello non disponibile per questo progetto. Controlla il nome del modello e la disponibilita in Google AI Studio."
+        elif _status == 400:
+            _message = "Gemini ha rifiutato i parametri della richiesta (HTTP 400)."
+        else:
+            _message = f"La verifica si e interrotta ({type(_error).__name__}, HTTP {_status}). Nessun rapporto finale disponibile."
+        if _detail:
+            _message += "\n\nDettaglio del servizio:\n\n" + _detail[:2000]
+        mo.output.append(mo.callout(mo.md("**Verifica interrotta**\n\n" + _message), kind="danger"))
     return (events,)
 
 

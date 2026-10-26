@@ -2,6 +2,61 @@
 
 Pluggable guardrail framework for geospatial AI.
 
+## Avvio rapido di questa versione
+
+Versione locale derivata da [NASA-IMPACT/geoguard](https://github.com/NASA-IMPACT/geoguard),
+con Gemini, salvataggio locale della chiave e avvio dal browser.
+Codice originale e licenza Apache 2.0 conservati.
+
+### Windows
+
+Prerequisiti: Git e Python 3.12 o successivo, disponibile nel PATH.
+
+```powershell
+git clone https://github.com/Alessio-Pecilli/geoGuard-temp.git
+cd geoGuard-temp
+.\Installa-GeoGuard.cmd
+.\Avvia-GeoGuard.cmd
+```
+
+Il primo comando di installazione prepara le dipendenze; negli avvii successivi
+basta fare doppio clic su **Avvia-GeoGuard.cmd**.
+La pagina si apre su http://127.0.0.1:8765.
+Per fermare il server, eseguire `Ferma-GeoGuard.ps1` con PowerShell.
+
+### macOS / Linux
+
+Prerequisiti: Git, Python 3.12 o successivo e [uv](https://docs.astral.sh/uv/).
+
+```sh
+git clone https://github.com/Alessio-Pecilli/geoGuard-temp.git
+cd geoGuard-temp
+uv sync --locked
+uv run marimo run notebooks/geoguard-e2e.py --host 127.0.0.1 --port 8765
+```
+
+### Chiave e utilizzo
+
+1. Crea una chiave su [Google AI Studio](https://aistudio.google.com/apikey).
+2. Inseriscila nel campo **Chiave API Gemini**.
+3. Premi **Salva chiave su questo PC**: viene salvata nel file locale `.env`,
+   escluso da Git. Ai prossimi avvii puoi lasciare vuoto il campo.
+4. Inserisci un'affermazione con luogo e data, poi premi **Verify**.
+
+Il modello predefinito e `google:gemini-3.5-flash-lite`.
+La disponibilita del piano gratuito e le quote dipendono dal progetto Google:
+non e un servizio illimitato. Nessun passaggio automatico a modelli alternativi.
+Le credenziali NASA sono opzionali per l'interfaccia e necessarie per i relativi
+controlli satellitari MODIS. Vedi `.env.example`.
+
+Questa copia supporta testo e maschere TIFF di allagamento
+(0 = asciutto, 1 = allagato, 255 = dato mancante).
+I risultati confrontano affermazioni con evidenze esterne e non certificano
+l'autenticita dei file. Gli errori del servizio vengono mostrati nella pagina.
+
+La documentazione seguente descrive il progetto originale; in questa versione
+il modello predefinito e Gemini anziche OpenAI.
+
 ---
 
 ## What is GeoGuard?
